@@ -378,6 +378,83 @@ def gen_macro_calendar(cal_all: Calendar):
 
     write_ics(cal, "06_macro.ics")
 
+def gen_cn_report_deadlines_template(cal_all: Calendar):
+    """A股财报披露硬截止日 + 常见密集窗口（规则/经验层）"""
+    start, end = date_range()
+    cal = make_cal("模板｜财报季与窗口（规则）")
+
+    y = start.year
+    # 覆盖未来一年多一点
+    years = {y, y + 1}
+
+    for yy in sorted(years):
+        fixed_days = [
+            (date(yy, 4, 30), "A股｜一季报披露截止日（通常4/30）"),
+            (date(yy, 4, 30), "A股｜年报披露截止日（通常4/30）"),
+            (date(yy, 8, 31), "A股｜中报披露截止日（通常8/31）"),
+            (date(yy, 10, 31), "A股｜三季报披露截止日（通常10/31）"),
+        ]
+        for d, s in fixed_days:
+            if start <= d <= end:
+                add_all_day_event([cal, cal_all], d, s, uid=f"tpl-report-deadline-{s}-{d}")
+
+        # 经验窗口：用“周”做区间（全是全天事件，不会误导到具体时刻）
+        windows = [
+            (date(yy, 1, 10), date(yy, 1, 31), "A股｜年报预告/快报密集窗口（经验）"),
+            (date(yy, 4, 1), date(yy, 4, 30), "A股｜财报披露高峰（月度窗口）"),
+            (date(yy, 7, 1), date(yy, 7, 31), "A股｜中报预告密集窗口（经验）"),
+            (date(yy, 8, 1), date(yy, 8, 31), "A股｜中报披露高峰（月度窗口）"),
+            (date(yy, 10, 1), date(yy, 10, 31), "A股｜三季报披露高峰（月度窗口）"),
+        ]
+        for d1, d2, s in windows:
+            # 用开始日标记窗口即可（不做每日重复，避免刷屏）
+            if start <= d1 <= end:
+                add_all_day_event([cal, cal_all], d1, s, description=f"窗口范围：{d1} ~ {d2}", uid=f"tpl-window-{s}-{d1}")
+
+    write_ics(cal, "07_report_templates.ics")
+
+
+def gen_cn_macro_template(cal_all: Calendar):
+    """中国宏观数据发布时间“常见窗口”（规则/经验层）"""
+    start, end = date_range()
+    cal = make_cal("模板｜中国宏观数据窗口（经验）")
+
+    # 生成未来 N 个月的“窗口提示”
+    cursor = date(start.year, start.month, 1)
+
+    while cursor <= end:
+        yy, mm = cursor.year, cursor.month
+
+        # 1) 外汇储备：常见在每月上旬（这里用每月第 7 日作为提醒点）
+        d_fx = date(yy, mm, 7)
+        if start <= d_fx <= end:
+            add_all_day_event([cal, cal_all], d_fx, f"宏观｜外汇储备公布窗口（经验：上旬）", uid=f"tpl-macro-fx-{d_fx}")
+
+        # 2) CPI/PPI：常见在每月上旬（这里用第 10 日）
+        d_cpi = date(yy, mm, 10)
+        if start <= d_cpi <= end:
+            add_all_day_event([cal, cal_all], d_cpi, f"宏观｜CPI/PPI公布窗口（经验：上旬）", uid=f"tpl-macro-cpi-{d_cpi}")
+
+        # 3) 社融/信贷/M2：常见在每月中旬（这里用第 15 日）
+        d_ts = date(yy, mm, 15)
+        if start <= d_ts <= end:
+            add_all_day_event([cal, cal_all], d_ts, f"宏观｜社融/信贷/M2公布窗口（经验：中旬）", uid=f"tpl-macro-ts-{d_ts}")
+
+        # 4) LPR：每月 20 日（相对固定）
+        d_lpr = date(yy, mm, 20)
+        if start <= d_lpr <= end:
+            add_all_day_event([cal, cal_all], d_lpr, f"宏观｜LPR报价日（每月20日）", uid=f"tpl-macro-lpr-{d_lpr}")
+
+        # 5) PMI：常见在月末（这里用每月最后一天）
+        # 计算当月最后一天
+        next_month = (cursor + relativedelta(months=1))
+        last_day = next_month - timedelta(days=1)
+        if start <= last_day <= end:
+            add_all_day_event([cal, cal_all], last_day, f"宏观｜PMI公布窗口（月末/次月初附近）", uid=f"tpl-macro-pmi-{last_day}")
+
+        cursor = cursor + relativedelta(months=1)
+
+    write_ics(cal, "08_macro_templates.ics")
 
 if __name__ == "__main__":
     # 总合集（日历订阅只需要这一个链接）
@@ -389,6 +466,8 @@ if __name__ == "__main__":
     gen_dividend_calendar(cal_all)
     gen_index_rebalance_calendar(cal_all)
     gen_macro_calendar(cal_all)
+    gen_cn_report_deadlines_template(cal_all)
+    gen_cn_macro_template(cal_all)
 
     # 输出总合集 + 分主题
     write_ics(cal_all, "00_all.ics")
