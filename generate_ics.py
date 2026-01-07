@@ -22,7 +22,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 def _to_dt(x) -> datetime | None:
     """把各种日期格式安全转成 datetime（失败返回 None）"""
-    if pd.isna(x) or x is None:
+    if x is None or (isinstance(x, float) and pd.isna(x)) or (hasattr(pd, "isna") and pd.isna(x)):
         return None
     try:
         ts = pd.to_datetime(x)
@@ -60,7 +60,7 @@ def make_cal(name: str) -> Calendar:
     cal.add("prodid", f"-//{name}//CN Market Calendar//")
     cal.add("version", "2.0")
     cal.add("calscale", "GREGORIAN")
-    cal.add("X-WR-CALNAME", name)         # 苹果日历显示名
+    cal.add("X-WR-CALNAME", name)          # 苹果日历显示名
     cal.add("X-WR-TIMEZONE", "Asia/Shanghai")
     return cal
 
@@ -68,25 +68,21 @@ def make_cal(name: str) -> Calendar:
 def add_all_day_event(cals, day: date, summary: str, description: str = "", uid: str = ""):
     """
     同一个事件写入多个 Calendar（例如分类日历 + 总日历）
+    关键：每个日历都重新创建一个 Event（避免出现嵌套 VEVENT）
     """
     if not isinstance(cals, (list, tuple)):
         cals = [cals]
 
-    ev = Event()
-    ev.add("summary", summary)
-    ev.add("dtstart", day)
-    ev.add("dtend", day + timedelta(days=1))
-    if description:
-        ev.add("description", description)
-    ev.add("uid", uid or f"{summary}-{day.isoformat()}@cn-market-calendar")
-    ev.add("dtstamp", datetime.now(tz=TZ))
-
-    # 保险做法：为每个日历 clone 一份 Event
     for cal in cals:
-        ev2 = Event()
-        for k, v in ev.property_items():
-            ev2.add(k, v)
-        cal.add_component(ev2)
+        ev = Event()
+        ev.add("summary", summary)
+        ev.add("dtstart", day)
+        ev.add("dtend", day + timedelta(days=1))
+        if description:
+            ev.add("description", description)
+        ev.add("uid", uid or f"{summary}-{day.isoformat()}@cn-market-calendar")
+        ev.add("dtstamp", datetime.now(tz=TZ))
+        cal.add_component(ev)
 
 
 def write_ics(cal: Calendar, filename: str):
@@ -111,7 +107,7 @@ def gen_ipo_calendar(cal_all: Calendar):
     start, end = date_range()
     cal = make_cal("A股｜新股申购/缴款/上市")
 
-    df = ak.stock_xgsglb_em()  # 新股申购与中签查询
+    df = ak.stock_xgsglb_em()
 
     code_col = _pick_col(df, ["股票代码", "申购代码"])
     name_col = _pick_col(df, ["股票简称"])
@@ -217,7 +213,7 @@ def gen_earnings_calendar(cal_all: Calendar):
     start, end = date_range()
     cal = make_cal("A股｜财报披露（预约）")
 
-    df = ak.stock_yysj_em()  # 预约披露时间
+    df = ak.stock_yysj_em()
 
     code_col = _pick_col(df, ["股票代码", "代码"])
     name_col = _pick_col(df, ["股票简称", "名称"])
@@ -394,5 +390,5 @@ if __name__ == "__main__":
     gen_index_rebalance_calendar(cal_all)
     gen_macro_calendar(cal_all)
 
-    # 输出总合集
+    # 输出总合集 + 分主题
     write_ics(cal_all, "00_all.ics")
