@@ -1,1 +1,34 @@
+name: build-ics
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 每天 UTC 02:00（北京时间10:00左右）更新
+  workflow_dispatch:
 
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+
+      - name: Generate ICS
+        env:
+          DAYS_FORWARD: "90"
+        run: |
+          python generate_ics.py
+
+      - name: Deploy to GitHub Pages branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
