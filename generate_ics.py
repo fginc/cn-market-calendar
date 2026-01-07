@@ -17,6 +17,8 @@ DAYS_FORWARD = int(os.getenv("DAYS_FORWARD", "90"))
 
 # 输出目录：GitHub Actions 会把 public/ 发布到 Pages
 OUT_DIR = "public"
+UNLOCK_MV_MIN_YI = float(os.getenv("UNLOCK_MV_MIN_YI", "5"))  # 解禁市值阈值：亿元
+MAX_EVENTS_PER_DAY = int(os.getenv("MAX_EVENTS_PER_DAY", "30"))  # 同一天最多保留多少条（避免刷屏）
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
@@ -199,6 +201,17 @@ def gen_unlock_calendar(cal_all: Calendar):
             f"解禁市值: {mv}" if mv else ""
         ] if x])
 
+                # 过滤：只保留“解禁市值 >= 阈值”的大解禁
+        mv_yi = None
+        if mv:
+            try:
+                mv_yi = float(str(mv).replace(",", "").replace("亿", "").strip())
+            except Exception:
+                mv_yi = None
+
+        if mv_yi is not None and mv_yi < UNLOCK_MV_MIN_YI:
+            continue
+
         add_all_day_event([cal, cal_all], dd, f"限售解禁｜{title}", description=desc, uid=f"unlock-{code}-{dd}")
 
     write_ics(cal, "02_unlock.ics")
@@ -360,6 +373,32 @@ def gen_macro_calendar(cal_all: Calendar):
         imp = str(r.get(imp_col, "")).strip() if imp_col else ""
         exp = str(r.get(exp_col, "")).strip() if exp_col else ""
         pre = str(r.get(pre_col, "")).strip() if pre_col else ""
+
+                # 去噪：只保留重点国家（可按需加/减）
+        if ctry and ctry not in ("中国", "美国", "欧元区"):
+            continue
+
+        # 去噪：只保留高重要性（不同数据源格式不一，尽量兼容）
+        if imp:
+            imp_s = str(imp)
+            # 常见：★★★★★ / 3 / 高 / 重要 / ★★★ 等
+            if ("高" in imp_s) or ("重要" in imp_s):
+                pass
+            else:
+                # 提取数字重要性（如 1/2/3/4/5）
+                nums = re.findall(r"\d+", imp_s)
+                if nums:
+                    try:
+                        if int(nums[0]) < 3:
+                            continue
+                    except Exception:
+                        pass
+                elif "★" in imp_s:
+                    if imp_s.count("★") < 3:
+                        continue
+                else:
+                    # 不认识的格式：不过滤
+                    pass
 
         summary = f"{ctry}｜{evn}" if ctry else evn
         desc = "；".join([x for x in [
