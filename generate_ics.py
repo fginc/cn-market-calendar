@@ -682,8 +682,8 @@ if __name__ == "__main__":
     gen_dividend_calendar(cal_all)
     gen_index_rebalance_calendar(cal_all)
     gen_macro_calendar(cal_all)
-    gen_cn_report_deadlines_template(cal_all)
-    gen_cn_macro_template(cal_all)
+    # gen_cn_report_deadlines_template(cal_all)
+    # gen_cn_macro_template(cal_all)
     try:
         gen_nbs_release_calendar(cal_all)
     except Exception as e:
