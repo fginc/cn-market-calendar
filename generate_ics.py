@@ -495,6 +495,181 @@ def gen_cn_macro_template(cal_all: Calendar):
 
     write_ics(cal, "08_macro_templates.ics")
 
+def gen_nbs_release_calendar(cal_all: Calendar):
+    """
+    国家统计局：最新统计信息发布日程（每年更新一次）
+    来源：https://www.stats.gov.cn/sj/fbrc/bnxxfb/
+    生成：09_nbs_release.ics，并写入 00_all.ics
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    url = "https://www.stats.gov.cn/sj/fbrc/bnxxfb/"
+    cal = make_cal("国家统计局｜重要数据发布日程")
+
+    # 1) 拉取网页
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; github-actions; +https://github.com/)"
+    }
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    html = resp.text
+
+    soup = BeautifulSoup(html, "lxml")
+
+    # 2) 从页面标题/正文中抓年份（例如：2026年国家统计局主要统计信息发布日程表）
+    text_all = soup.get_text("\n", strip=True)
+    m = re.search(r"(\d{4})年国家统计局主要统计信息发布日程表", text_all)
+    if not m:
+        # 兜底：找到页面里第一个“2026年”这种
+        m2 = re.search(r"(\d{4})年", text_all)
+        if not m2:
+            raise RuntimeError("未能识别发布日程年份（页面结构可能变了）")
+        year = int(m2.group(1))
+    else:
+        year = int(m.group(1))
+
+    # 3) 找到主表格（页面里通常只有一个核心日程表，选包含“序号/内容/1月”的表）
+    tables = soup.find_all("table")
+    target = None
+    for t in tables:
+        t_text = t.get_text(" ", strip=True)
+        if ("序号" in t_text) and ("内容" in t_text) and ("1月" in t_text) and ("12月" in t_text):
+            target = t
+            break
+    if target is None:
+        raise RuntimeError("未找到日程表格（页面结构可能变了）")
+
+    # 4) 读表格：逐行取单元格文本
+    rows = []
+    for tr in target.find_all("tr"):
+        cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+        if cells:
+            rows.append(cells)
+
+    # 5) 识别表头：找到月份列起点
+    # 期望表头里包含：序号、内容、1月..12月
+    header_idx = None
+    for i, r in enumerate(rows[:10]):  # 表头一般在前几行
+        joined = " ".join(r)
+        if ("序号" in joined) and ("内容" in joined) and ("1月" in joined) and ("12月" in joined):
+            header_idx = i
+            break
+    if header_idx is None:
+        raise RuntimeError("未识别到表头行（页面结构可能变了）")
+
+    header = rows[header_idx]
+    # 找到“1月”所在列
+    try:
+        m_start = header.index("1月")
+    except ValueError:
+        # 兜底：找包含“1月”的单元格
+        m_start = next(i for i, v in enumerate(header) if "1月" in v)
+
+    # 月份列 1..12
+    month_cols = list(range(m_start, m_start + 12))
+
+    # 6) 逐条内容解析：通常是“日期行” + 紧跟一个“时间行”
+    # 日期行：内容列有文字，月份列里是“19/一”“4/三 注5”“……”等
+    # 时间行：内容列为空/很短，月份列里是“10:00”“9:30”重复
+    def parse_day(cell: str) -> int | None:
+        if not cell:
+            return None
+        if "……" in cell or cell in ("-", "—"):
+            return None
+        # 取开头的数字（例如 "4/三 注5" -> 4）
+        mday = re.match(r"^\s*(\d{1,2})\s*/", cell)
+        if not mday:
+            return None
+        return int(mday.group(1))
+
+    def parse_time(cell: str) -> tuple[int, int] | None:
+        if not cell:
+            return None
+        mt = re.search(r"(\d{1,2}):(\d{2})", cell)
+        if not mt:
+            return None
+        return int(mt.group(1)), int(mt.group(2))
+
+    content_col = None
+    # 找“内容”列
+    for i, v in enumerate(header):
+        if "内容" == v or "内容" in v:
+            content_col = i
+            break
+    if content_col is None:
+        content_col = 1  # 常见结构：第2列
+
+    # 从表头下一行开始遍历
+    i = header_idx + 1
+    while i < len(rows):
+        r = rows[i]
+        # 防止短行
+        if len(r) <= max(month_cols + [content_col]):
+            i += 1
+            continue
+
+        content = r[content_col].strip()
+
+        # 判断是不是“日期行”
+        has_days = any(parse_day(r[c]) is not None for c in month_cols)
+        has_times = any(parse_time(r[c]) is not None for c in month_cols)
+
+        # 日期行：有内容 + 有day
+        if content and has_days:
+            # 先收集所有月份的日期
+            day_map: dict[int, int] = {}  # month -> day
+            for mi, col in enumerate(month_cols, start=1):
+                d = parse_day(r[col])
+                if d is not None:
+                    day_map[mi] = d
+
+            # 看下一行是否是时间行
+            time_map: dict[int, tuple[int, int]] = {}
+            if i + 1 < len(rows):
+                r2 = rows[i + 1]
+                if len(r2) > max(month_cols + [content_col]):
+                    content2 = r2[content_col].strip()
+                    has_times2 = any(parse_time(r2[c]) is not None for c in month_cols)
+                    # 时间行：内容空/很短 + 有time
+                    if (not content2 or content2 in ("", " ", "　")) and has_times2:
+                        for mi, col in enumerate(month_cols, start=1):
+                            t = parse_time(r2[col])
+                            if t is not None:
+                                time_map[mi] = t
+                        i += 1  # 吃掉下一行
+
+            # 默认时间（如果时间行没给某个月，就尝试用第一个时间作为默认）
+            default_time = None
+            if time_map:
+                default_time = next(iter(time_map.values()))
+
+            # 生成事件
+            for month, day in day_map.items():
+                hhmm = time_map.get(month) or default_time
+                if hhmm:
+                    hh, mm = hhmm
+                    dt = TZ.localize(datetime(year, month, day, hh, mm))
+                    # timed event：给1小时默认时长（只为日历显示好看）
+                    ev = Event()
+                    ev.add("summary", f"国家统计局｜{content}")
+                    ev.add("dtstart", dt)
+                    ev.add("dtend", dt + timedelta(hours=1))
+                    ev.add("uid", f"nbs-{year}-{month:02d}-{day:02d}-{abs(hash(content))}@stats.gov.cn")
+                    ev.add("dtstamp", datetime.now(tz=TZ))
+                    ev.add("description", f"来源：{url}\n注：发布日期为初步计划，可能调整。")
+                    cal.add_component(ev)
+                    cal_all.add_component(ev)
+                else:
+                    # 如果页面没给时间，就做全天事件
+                    add_all_day_event([cal, cal_all], date(year, month, day), f"国家统计局｜{content}",
+                                      description=f"来源：{url}\n注：发布日期为初步计划，可能调整。",
+                                      uid=f"nbs-{year}-{month:02d}-{day:02d}-{abs(hash(content))}@stats.gov.cn")
+
+        i += 1
+
+    write_ics(cal, "09_nbs_release.ics")
+
 if __name__ == "__main__":
     # 总合集（日历订阅只需要这一个链接）
     cal_all = make_cal("中国市场投资日历（全量）")
@@ -507,6 +682,7 @@ if __name__ == "__main__":
     gen_macro_calendar(cal_all)
     gen_cn_report_deadlines_template(cal_all)
     gen_cn_macro_template(cal_all)
+    gen_nbs_release_calendar(cal_all)
 
     # 输出总合集 + 分主题
     write_ics(cal_all, "00_all.ics")
