@@ -3,3 +3,6 @@ pandas
 icalendar
 python-dateutil
 pytz
+requests
+beautifulsoup4
+lxml
