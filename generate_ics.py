@@ -511,23 +511,25 @@ def gen_nbs_release_calendar(cal_all: Calendar):
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; github-actions; +https://github.com/)"
     }
-    resp = requests.get(url, headers=headers, timeout=30)
+    resp = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
     resp.raise_for_status()
+# 编码兜底（避免中文变成乱码导致匹配不到“2026年”）
+    resp.encoding = resp.apparent_encoding or resp.encoding or "utf-8"
     html = resp.text
 
     soup = BeautifulSoup(html, "lxml")
 
     # 2) 从页面标题/正文中抓年份（例如：2026年国家统计局主要统计信息发布日程表）
+    # 用更稳妥的方式拿到文本与年份
     text_all = soup.get_text("\n", strip=True)
-    m = re.search(r"(\d{4})年国家统计局主要统计信息发布日程表", text_all)
-    if not m:
-        # 兜底：找到页面里第一个“2026年”这种
-        m2 = re.search(r"(\d{4})年", text_all)
-        if not m2:
-            raise RuntimeError("未能识别发布日程年份（页面结构可能变了）")
-        year = int(m2.group(1))
+
+    # 1) 尝试从全文找所有“XXXX年”，取最大值（通常就是当年日程）
+    years = [int(y) for y in re.findall(r"(\d{4})\s*年", text_all)]
+    if years:
+        year = max(years)
     else:
-        year = int(m.group(1))
+        # 2) 如果页面里完全找不到年份（可能被反爬/返回模板页），用当前年份兜底，不让流程挂
+        year = datetime.now(tz=TZ).year
 
     # 3) 找到主表格（页面里通常只有一个核心日程表，选包含“序号/内容/1月”的表）
     tables = soup.find_all("table")
@@ -682,7 +684,10 @@ if __name__ == "__main__":
     gen_macro_calendar(cal_all)
     gen_cn_report_deadlines_template(cal_all)
     gen_cn_macro_template(cal_all)
-    gen_nbs_release_calendar(cal_all)
+    try:
+        gen_nbs_release_calendar(cal_all)
+    except Exception as e:
+        print("NBS calendar skipped due to error:", repr(e))
 
     # 输出总合集 + 分主题
     write_ics(cal_all, "00_all.ics")
